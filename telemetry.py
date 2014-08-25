@@ -1,22 +1,36 @@
+from database import Database
 import packets
 import pyuv
 import signal
 
 class Telemetry(object):
     def __init__(self, hostname, port):
+        self.database = Database('telemetry.db')
         self.loop = pyuv.Loop.default_loop()
         self.hostname = hostname
         self.port = port
+        self.session = -1
 
     def update_cb(self, handle, hostinfo, flags, data, error):
         sample = packets.CarInfo()
         sample.unpack(data)
-        print(sample.__dict__)
+        def insertData(handle):
+            self.database.newData(sample.__dict__, self.session)
+            self.asyncs.discard(handle)
+        async = pyuv.Async(self.loop, insertData)
+        self.asyncs.add(async)
+        async.send()
 
     def handshake_cb(self, handle, hostinfo, flags, data, error):
         self.udp.stop_recv()
         resp = packets.HandshakeResp()
         resp.unpack(data)
+        def startSession(handle):
+            self.session = self.database.newSession(resp)
+            self.asyncs.discard(handle)
+        async = pyuv.Async(self.loop, startSession)
+        self.asyncs.add(async)
+        async.send()
         hs = packets.Handshake()
         hs.identifier = 2
         hs.version = 0
@@ -34,6 +48,7 @@ class Telemetry(object):
         self.loop.stop()
 
     def main(self):
+        self.asyncs = set()
         self.udp = pyuv.UDP(self.loop)
         self.udp.bind(("0.0.0.0", 9997))
         self.udp.start_recv(self.handshake_cb)
