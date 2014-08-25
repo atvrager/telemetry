@@ -17,6 +17,7 @@ class Telemetry(object):
         def insertData(handle):
             self.database.newData(sample.__dict__, self.session)
             self.asyncs.discard(handle)
+        self.timeout.again()
         async = pyuv.Async(self.loop, insertData)
         self.asyncs.add(async)
         async.send()
@@ -28,6 +29,7 @@ class Telemetry(object):
         def startSession(handle):
             self.session = self.database.newSession(resp)
             self.asyncs.discard(handle)
+        self.timeout.again()
         async = pyuv.Async(self.loop, startSession)
         self.asyncs.add(async)
         async.send()
@@ -37,6 +39,15 @@ class Telemetry(object):
         hs.operationId = 1
         self.udp.send((self.hostname, self.port), hs.pack())
         self.udp.start_recv(self.update_cb)
+
+    def timeout_cb(self, handle):
+        self.udp.stop_recv()
+        self.udp.start_recv(self.handshake_cb)
+        hs = packets.Handshake()
+        hs.identifier = 2
+        hs.version = 0
+        hs.operationId = 0
+        self.udp.send((self.hostname, self.port), hs.pack())
 
     def sigint_cb(self, handle, signum):
         self.udp.stop_recv()
@@ -51,17 +62,13 @@ class Telemetry(object):
         self.asyncs = set()
         self.udp = pyuv.UDP(self.loop)
         self.udp.bind(("0.0.0.0", 9997))
-        self.udp.start_recv(self.handshake_cb)
+
+        self.timeout = pyuv.Timer(self.loop)
+        self.timeout.start(self.timeout_cb, 0, 10)
 
         self.sigint = pyuv.Signal(self.loop)
         self.sigint.start(self.sigint_cb, signal.SIGINT)
 
-        hs = packets.Handshake()
-        hs.identifier = 2
-        hs.version = 0
-        hs.operationId = 0
-
-        self.udp.send((self.hostname, self.port), hs.pack())
 
         self.loop.run(pyuv.UV_RUN_DEFAULT)
 
